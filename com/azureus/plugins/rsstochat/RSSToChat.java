@@ -29,6 +29,8 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.gudy.bouncycastle.util.encoders.Base64;
+
 import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.download.DownloadManagerInitialisationAdapter;
 import com.biglybt.core.download.DownloadManagerState;
@@ -38,6 +40,7 @@ import com.biglybt.core.torrent.TOTorrentCreator;
 import com.biglybt.core.torrent.TOTorrentFactory;
 import com.biglybt.core.torrent.TOTorrentFile;
 import com.biglybt.core.util.AENetworkClassifier;
+import com.biglybt.core.util.BEncoder;
 import com.biglybt.core.util.Base32;
 import com.biglybt.core.util.ByteFormatter;
 import com.biglybt.core.util.Debug;
@@ -362,6 +365,7 @@ RSSToChat
 				SimpleXMLParserDocumentNode chat_node 			= kid.getChild( "chat" );
 				SimpleXMLParserDocumentNode presentation_node 	= kid.getChild( "presentation" );
 				SimpleXMLParserDocumentNode refresh_node 		= kid.getChild( "refresh" );
+				SimpleXMLParserDocumentNode flags_node 			= kid.getChild( "flags" );
 				SimpleXMLParserDocumentNode associations_node 	= kid.getChild( "associations" );
 				
 				String 	source;
@@ -377,6 +381,8 @@ RSSToChat
 				String	website_name			= null;
 				int		website_retain_sites	= WEBSITE_RETAIN_SITES_DEFAULT;
 				int		website_retain_items	= WEBSITE_RETAIN_ITEMS_DEFAULT;
+				
+				int	flags = 0;
 				
 				List<Subscription>	item_associations = new ArrayList<Subscription>();
 				
@@ -539,6 +545,20 @@ RSSToChat
 
 				}
 				
+				if ( flags_node != null ){
+					
+					String flags_str = flags_node.getValue().trim();
+					
+					if ( flags_str.equals( "nopost" )){
+				
+						flags = Mapping.FLAG_NO_POST;
+						
+					}else{
+						
+						throw( new Exception( "<flags> value of '" + flags_str + "' is invalid" ));
+					}
+				}
+				
 				int	type = Mapping.TYPE_NORMAL;
 				
 				if ( type_node != null ){
@@ -589,8 +609,12 @@ RSSToChat
 						
 						presentation = "link";
 						
+					}else if ( p_type.equals( "link_raw" )){
+						
+						presentation = "link_raw";
+						
 					}else if ( p_type.equals( "website" )){
-											
+						
 						presentation = "website";
 						
 					}else{
@@ -673,7 +697,7 @@ RSSToChat
 				}
 				for ( String network: networks ){
 					
-					Mapping mapping = new Mapping( source, is_rss, desc_link_pattern, link_type, ignore_dates, min_seeds, min_leechers, network, key, type, nick, presentation, website_name, website_retain_sites, website_retain_items, item_associations, refresh_mins );
+					Mapping mapping = new Mapping( source, is_rss, desc_link_pattern, link_type, ignore_dates, min_seeds, min_leechers, network, key, type, nick, presentation, website_name, website_retain_sites, website_retain_items, item_associations, refresh_mins, flags );
 					
 					log( "    Mapping: " + mapping.getOverallName());
 					
@@ -802,7 +826,9 @@ RSSToChat
 			
 			int	posted = 0;
 					
-			boolean presentation_is_link = mapping.getPresentation().equals( "link" );
+			String presentation = mapping.getPresentation();
+			
+			boolean presentation_is_link = presentation.startsWith( "link" );
 
 			boolean	site_updated = force;
 			
@@ -1084,15 +1110,20 @@ RSSToChat
 				
 				if ( presentation_is_link ){
 					
+					boolean do_posting = !mapping.hasFlag( Mapping.FLAG_NO_POST );
+					
 					magnet = buildMagnetTail(magnet, dl_link, cdp_link, title_short, size, item_time, seeds, leechers );
 					
-					inst.sendMessage( magnet, new HashMap<String, Object>());
+					if ( do_posting ){
+					
+						inst.sendMessage( magnet, new HashMap<String, Object>());
+					}
 					
 					history.setPublished( history_key, item_time );
 					
 					posted++;
 					
-					if ( posted >= MAX_POSTS_PER_REFRESH ){
+					if ( posted >= MAX_POSTS_PER_REFRESH && do_posting ){
 						
 						try_again = true;
 						
@@ -1133,6 +1164,45 @@ RSSToChat
 		return( try_again );
 	}	
 	
+	private byte[]
+	hackRawLink(
+		String	str )
+	{
+		try{
+
+			int	pos = str.indexOf( "?i2paddresshelper=" );
+			
+			if ( pos != -1 ){
+				
+				String dest_str = str.substring( pos + 18 ).trim();
+				
+				dest_str = dest_str.replace('~', '/');
+				dest_str = dest_str.replace('-', '+');
+				
+				byte[] dest_bytes = Base64.decode( dest_str );
+				
+				String host = new URL( str.substring( 0, pos )).getHost();
+				
+				Map m = new HashMap();
+				
+				m.put( "h", host );
+				m.put( "a", dest_bytes );
+				
+				return( BEncoder.encode( m ));
+				
+			}else{
+			
+				return( str.getBytes( "UTF-8" ));
+			}
+		
+		}catch( Throwable e ){
+				
+			Debug.out( e );
+			
+			return( null );
+		}
+	}
+			
 	private boolean
 	updateSubscription(
 		Mapping			mapping,
@@ -1146,8 +1216,11 @@ RSSToChat
 		
 		Subscription[] subscriptions = SubscriptionManagerFactory.getSingleton().getSubscriptions();
 		
-		boolean presentation_is_link = mapping.getPresentation().equals( "link" );
-
+		String presentation = mapping.getPresentation();
+		
+		boolean presentation_is_link 		= presentation.startsWith( "link" );
+		boolean presentation_is_link_raw	= presentation.equals( "link_raw" );
+		
 		boolean	subs_found = false;
 		
 		for ( Subscription sub: subscriptions ){
@@ -1173,7 +1246,15 @@ RSSToChat
 					
 					if ( history.hasPublished( history_key )){
 						
-						continue;
+							// hack to allow republish - should make separate config sometime
+						
+						if ( presentation_is_link_raw && !result.getRead()){
+							
+							
+						}else{
+						
+							continue;
+						}
 					}
 					
 					result_map.put( result, result.toPropertyMap());
@@ -1221,6 +1302,8 @@ RSSToChat
 				log( "    Subscription '" + subscription_name + "' returned " + all_results.length + " total results" );
 
 				int	posted = 0;
+				
+				boolean do_posting = !mapping.hasFlag( Mapping.FLAG_NO_POST );
 				
 				for ( Map.Entry<SubscriptionResult, Map<Integer,Object>> entry: sorted_result_map.entrySet()){
 					
@@ -1304,18 +1387,48 @@ RSSToChat
 						}
 						
 						if ( presentation_is_link ){
+														
+							if ( presentation_is_link_raw ){
+								
+								String link = dl_link;
+								
+								if ( link == null ){
+									
+									link = cdp_link;
+								}
+								
+								if ( link == null ){
+									
+									continue;
+								}
+								
+								byte[] message = hackRawLink( link );
+								
+								if ( do_posting ){
+								
+									chat.sendRawMessage( message, new HashMap<String, Object>(), new HashMap<String, Object>());
+								}
+							}else{
+								String magnet = buildMagnetHead( dl_link, cdp_link, "", title );
+								
+								magnet = buildMagnetTail( magnet, dl_link, cdp_link, title, size, result_time, seeds, leechers );
 							
-							String magnet = buildMagnetHead( dl_link, cdp_link, "", title );
-						
-							magnet = buildMagnetTail(magnet, dl_link, cdp_link, title, size, result_time, seeds, leechers );
+								if ( do_posting ){
+									
+									chat.sendMessage( magnet, new HashMap<String, Object>());
+								}
+							}
 							
-							chat.sendMessage( magnet, new HashMap<String, Object>());
-						
 							history.setPublished( history_key, result_time );
+							
+							if ( presentation_is_link_raw ){
+								
+								result.setRead( true );
+							}
 							
 							posted++;
 							
-							if ( posted >= MAX_POSTS_PER_REFRESH ){
+							if ( posted >= MAX_POSTS_PER_REFRESH && do_posting ){
 								
 								try_again = true;
 								
@@ -1338,18 +1451,48 @@ RSSToChat
 						}
 							
 						if ( presentation_is_link ){
-														
-							String magnet = buildMagnetHead( dl_link, cdp_link, hash, title );
+															
+							if ( presentation_is_link_raw ){
+								
+								String link = dl_link;
+								
+								if ( link == null ){
+									
+									link = cdp_link;
+								}
+								
+								if ( link == null ){
+									
+									continue;
+								}
+								
+								byte[] message = hackRawLink( link );
+								
+								if ( do_posting ){
+								
+									chat.sendRawMessage( message, new HashMap<String, Object>(), new HashMap<String, Object>());
+								}
+							}else{
+								String magnet = buildMagnetHead( dl_link, cdp_link, hash, title );
+								
+								magnet = buildMagnetTail(magnet, dl_link, cdp_link, title, size, result_time, seeds, leechers );					
 							
-							magnet = buildMagnetTail(magnet, dl_link, cdp_link, title, size, result_time, seeds, leechers );
-							
-							chat.sendMessage( magnet, new HashMap<String, Object>());
+								if ( do_posting ){
+								
+									chat.sendMessage( magnet, new HashMap<String, Object>());
+								}
+							}
 							
 							history.setPublished( history_key, result_time );
 							
+							if ( presentation_is_link_raw ){
+								
+								result.setRead( true );
+							}
+							
 							posted++;
 							
-							if ( posted >= MAX_POSTS_PER_REFRESH ){
+							if ( posted >= MAX_POSTS_PER_REFRESH && do_posting ){
 								
 								try_again = true;
 								
@@ -1371,8 +1514,14 @@ RSSToChat
 				
 				if ( presentation_is_link ){
 					
-					log( "    Posted " + posted + " new results" );
-
+					if ( do_posting ){
+					
+						log( "    Posted " + posted + " new results" );
+						
+					}else{
+						
+						log( "    Skipped posting of " + posted + " new results" );
+					}
 				}else{
 					
 					if ( site_updated ){
@@ -2011,8 +2160,13 @@ RSSToChat
 			
 			magnet += "[[$dn]]";
 			
-			inst.sendMessage( magnet, new HashMap<String, Object>());
+			boolean do_posting = !mapping.hasFlag( Mapping.FLAG_NO_POST );
 
+			if ( do_posting ){
+			
+				inst.sendMessage( magnet, new HashMap<String, Object>());
+			}
+			
 			log( "Posted site update" );
 			
 			List<DownloadManager> dms = global_manager.getDownloadManagers();
@@ -2368,6 +2522,8 @@ RSSToChat
 		private static final int	TYPE_READ_ONLY		= 2;
 		private static final int	TYPE_ADMIN			= 3;
 		
+		private static final int	FLAG_NO_POST		= 0x00000001;
+		
 		private final String		source;
 		private final boolean		is_rss;
 		private final Pattern		desc_link_pattern;
@@ -2388,6 +2544,7 @@ RSSToChat
 		private final int			retain_items;
 		
 		private final int			refresh;
+		private final int			flags;
 		
 		private ChatInstance	chat;
 		private boolean			updating;
@@ -2413,7 +2570,8 @@ RSSToChat
 			int					_retain_sites,
 			int					_retain_items,
 			List<Subscription>	_item_associations,
-			int					_refresh )
+			int					_refresh,
+			int					_flags )
 		{
 			source				= _source;
 			is_rss				= _is_rss;
@@ -2434,6 +2592,7 @@ RSSToChat
 			item_associations	= _item_associations;
 			
 			refresh				= _refresh;
+			flags				= _flags;
 			
 			retry_outstanding = true;		// initial load regardless
 		}
@@ -2487,6 +2646,17 @@ RSSToChat
 
 									for ( ChatInstance inst: chats ){
 										
+										if ( !inst.isAvailable()){
+											
+											// can't determine until bound
+										
+											log( "Waiting for bind to occur on " + inst.getNetAndKey() + " before resolving " + network + "/" + key );
+										
+											retry_outstanding = true;
+										
+											return;
+										}
+										
 										if ( type == TYPE_ADMIN ){
 											
 											if ( inst.isManagedFor( network, key )){
@@ -2496,7 +2666,7 @@ RSSToChat
 												break;
 											}
 										}else if ( type == TYPE_READ_ONLY ){
-										
+											
 											if ( inst.isReadOnlyFor( network, key )){
 											
 												chat = inst;
@@ -2550,6 +2720,8 @@ RSSToChat
 								log( "Chat initialised for '" + getChatName() + "': URL=" + chat.getURL() + ", history=" + history.getFileName());
 
 							}catch( Throwable e ){
+								
+								Debug.out( e );
 								
 								log( "Failed to create chat '" + getChatName() + "': " + Debug.getNestedExceptionMessage( e ));
 								
@@ -2679,6 +2851,19 @@ RSSToChat
 		getItemAssociations()
 		{
 			return( item_associations );
+		}
+		
+		private int
+		getFlags()
+		{
+			return( flags );
+		}
+		
+		private boolean
+		hasFlag(
+			int		flag )
+		{
+			return( (flags & flag ) != 0 );
 		}
 	}
 	
