@@ -374,6 +374,7 @@ RSSToChat
 				Pattern	desc_link_pattern 	= null;
 				String	link_type			= "magnet";
 				boolean	ignore_dates		= false;
+				boolean	publish_unread		= false;
 				int		min_seeds			= 0;
 				int		min_leechers		= 0;
 				
@@ -452,6 +453,15 @@ RSSToChat
 						String id_value = ignore_dates_node.getValue().trim();
 
 						ignore_dates = id_value.equalsIgnoreCase( "true" );
+					}
+					
+					SimpleXMLParserDocumentNode publish_unread_node = subs_node.getChild( "publish_unread" );
+
+					if ( publish_unread_node != null ){
+						
+						String id_value = publish_unread_node.getValue().trim();
+
+						publish_unread = id_value.equalsIgnoreCase( "true" );
 					}
 					
 					SimpleXMLParserDocumentNode min_seeds_node = subs_node.getChild( "minimum_seeds" );
@@ -697,7 +707,7 @@ RSSToChat
 				}
 				for ( String network: networks ){
 					
-					Mapping mapping = new Mapping( source, is_rss, desc_link_pattern, link_type, ignore_dates, min_seeds, min_leechers, network, key, type, nick, presentation, website_name, website_retain_sites, website_retain_items, item_associations, refresh_mins, flags );
+					Mapping mapping = new Mapping( source, is_rss, desc_link_pattern, link_type, ignore_dates, publish_unread, min_seeds, min_leechers, network, key, type, nick, presentation, website_name, website_retain_sites, website_retain_items, item_associations, refresh_mins, flags );
 					
 					log( "    Mapping: " + mapping.getOverallName());
 					
@@ -1221,6 +1231,8 @@ RSSToChat
 		boolean presentation_is_link 		= presentation.startsWith( "link" );
 		boolean presentation_is_link_raw	= presentation.equals( "link_raw" );
 		
+		boolean	publish_unread = mapping.getPublishUnread();
+		
 		boolean	subs_found = false;
 		
 		for ( Subscription sub: subscriptions ){
@@ -1242,18 +1254,30 @@ RSSToChat
 				
 				for ( SubscriptionResult result: all_results ){
 					
-					String history_key = result.getID();
-					
-					if ( history.hasPublished( history_key )){
+					if ( publish_unread ){
 						
-							// hack to allow republish - should make separate config sometime
+							// history ignored, just use read-status
 						
-						if ( presentation_is_link_raw && !result.getRead()){
-							
-							
-						}else{
+						if ( result.getRead()){
 						
 							continue;
+						}
+					}else{
+						String history_key = result.getID();
+						
+						if ( history.hasPublished( history_key )){
+							
+								// hack to allow republish - should make separate config sometime
+								// actually we have config now but keep hack for compat
+							
+							boolean is_read = result.getRead();
+							
+							if ( presentation_is_link_raw && !is_read ){
+														
+							}else{
+							
+								continue;
+							}
 						}
 					}
 					
@@ -1421,7 +1445,7 @@ RSSToChat
 							
 							history.setPublished( history_key, result_time );
 							
-							if ( presentation_is_link_raw ){
+							if ( publish_unread ||  presentation_is_link_raw ){
 								
 								result.setRead( true );
 							}
@@ -1485,7 +1509,7 @@ RSSToChat
 							
 							history.setPublished( history_key, result_time );
 							
-							if ( presentation_is_link_raw ){
+							if ( publish_unread || presentation_is_link_raw ){
 								
 								result.setRead( true );
 							}
@@ -2529,6 +2553,7 @@ RSSToChat
 		private final Pattern		desc_link_pattern;
 		private final String		link_type;
 		private final boolean		ignore_dates;
+		private final boolean		publish_unread;
 		private final int			min_seeds;
 		private final int			min_leechers;
 		private final int			type;
@@ -2559,6 +2584,7 @@ RSSToChat
 			Pattern				_desc_link_pattern,
 			String				_link_type,
 			boolean				_ignore_dates,
+			boolean				_publish_unread,
 			int					_min_seeds,
 			int					_min_leechers,
 			String				_network,
@@ -2578,6 +2604,7 @@ RSSToChat
 			desc_link_pattern	= _desc_link_pattern;
 			link_type			= _link_type;
 			ignore_dates		= _ignore_dates;
+			publish_unread		= _publish_unread;
 			min_seeds			= _min_seeds;
 			min_leechers		= _min_leechers;
 			network				= _network;
@@ -2815,6 +2842,12 @@ RSSToChat
 		getIgnoreDates()
 		{
 			return( ignore_dates );
+		}
+		
+		private boolean
+		getPublishUnread()
+		{
+			return( publish_unread );
 		}
 		
 		private int
