@@ -100,7 +100,7 @@ RSSToChat
 {
 	public static final int MAX_MESSAGE_SIZE		= 500;
 	public static final int MAX_POSTS_PER_REFRESH	= 10;
-	public static final int MAX_HISTORY_ENTRIES		= 1000;
+	public static final int MAX_HISTORY_ENTRIES		= 10000;
 	
 	public static final int WEBSITE_RETAIN_SITES_DEFAULT	= 7;
 	public static final int WEBSITE_RETAIN_ITEMS_DEFAULT	= 2048;
@@ -1082,7 +1082,7 @@ RSSToChat
 				}
 				
 				
-				String magnet = buildMagnetHead( dl_link, cdp_link, hash, title_short );
+				String magnet = buildMagnetHead( mapping, dl_link, cdp_link, hash, title_short );
 				
 				String history_key = magnet;
 				
@@ -1433,7 +1433,7 @@ RSSToChat
 									chat.sendRawMessage( message, new HashMap<String, Object>(), new HashMap<String, Object>());
 								}
 							}else{
-								String magnet = buildMagnetHead( dl_link, cdp_link, "", title );
+								String magnet = buildMagnetHead( mapping, dl_link, cdp_link, "", title );
 								
 								magnet = buildMagnetTail( magnet, dl_link, cdp_link, title, size, result_time, seeds, leechers );
 							
@@ -1497,7 +1497,7 @@ RSSToChat
 									chat.sendRawMessage( message, new HashMap<String, Object>(), new HashMap<String, Object>());
 								}
 							}else{
-								String magnet = buildMagnetHead( dl_link, cdp_link, hash, title );
+								String magnet = buildMagnetHead( mapping, dl_link, cdp_link, hash, title );
 								
 								magnet = buildMagnetTail(magnet, dl_link, cdp_link, title, size, result_time, seeds, leechers );					
 							
@@ -2172,7 +2172,7 @@ RSSToChat
 			
 			log( "Torrent created: " + torrent_file );
 			
-			String magnet = buildMagnetHead( null, null, Base32.encode( hash ), torrent_title );
+			String magnet = buildMagnetHead( mapping, null, null, Base32.encode( hash ), torrent_title );
 			
 			magnet += "&xl="  + torrent.getSize();
 			magnet += "&pfi=" + primary_file_index;
@@ -2361,6 +2361,7 @@ RSSToChat
 	
 	private String
 	buildMagnetHead(
+		Mapping		mapping,
 		String		dl_link,
 		String		cdp_link,
 		String		hash,
@@ -2370,14 +2371,74 @@ RSSToChat
 		
 		if ( dl_link != null && dl_link.toLowerCase(Locale.US).startsWith( "magnet:" )){
 			
-			magnet = dl_link;
+				// could be a load of stuff in an existing magnet that will blow limits
 			
+			boolean is_public = mapping.getNetwork() == AENetworkClassifier.AT_PUBLIC;
+			
+			String[] bits = dl_link.split( "&" );
+			
+			magnet = "";
+			
+			List<URL>	trackers = new ArrayList<>();
+			
+			for ( String bit: bits ){
+				
+				String[] temp = bit.split( "=" );
+				
+				if ( temp.length == 2 ){
+					
+					String lhs = temp[0].toLowerCase( Locale.US );
+					String rhs = UrlUtils.decode( temp[1] );
+					
+					if ( lhs.equals( "tr" )){
+						
+						try{
+							trackers.add( new URL( rhs ));
+							
+							continue;
+							
+						}catch( Throwable e ){
+							
+						}
+						
+					}else if ( lhs.equals( "fl" )){
+						
+						if ( rhs.contains( "127.0.0.1" )){
+							
+							continue;
+						}
+					}
+				}
+				
+				magnet += magnet.isEmpty()?bit:("&" + bit );
+			}
+			
+			if ( trackers.size() > 0 ){
+				
+				URL selected = trackers.get(0);
+				
+				for ( URL u: trackers ){
+					
+					boolean p = AENetworkClassifier.categoriseAddress( u.getHost()) == AENetworkClassifier.AT_PUBLIC;
+					
+					if ( p == is_public ){
+						
+						selected = u;
+						
+						break;
+					}
+				}
+				
+				String tr = "tr=" + UrlUtils.encode( selected.toExternalForm());
+				
+				magnet += magnet.isEmpty()?tr:("&" + tr );
+			}
 		}else{
 		
 			magnet = 
 				"magnet:?xt=urn:btih:" + hash + 
 				"&dn=" + encodeTitle( title, dl_link, cdp_link ) + 
-				(dl_link==null?"":("&fl=" + UrlUtils.encode( dl_link )));
+				((dl_link==null||dl_link.contains( "127.0.0.1"))?"":("&fl=" + UrlUtils.encode( dl_link )));
 		}
 		
 		return( magnet );
